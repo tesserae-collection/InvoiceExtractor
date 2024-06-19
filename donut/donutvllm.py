@@ -1,27 +1,36 @@
 import re
+from typing import Union
+from functools import lru_cache
 
 import torch
 from transformers import DonutProcessor, VisionEncoderDecoderModel
 from PIL import Image
 
-model_id = "mychen76/invoice-and-receipts_donut_v1"
+# model_id = "mychen76/invoice-and-receipts_donut_v1"
+model_id = "naver-clova-ix/donut-base-finetuned-cord-v2"
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+task_prompt_dict = {"mychen76/invoice-and-receipts_donut_v1": "<s_receipt>",
+                    "naver-clova-ix/donut-base-finetuned-cord-v2": "<s_cord-v2>"}
 
 
 class DonutVLLM:
     def __init__(self):
+        self.processor: DonutProcessor = ...
+        self.model: VisionEncoderDecoderModel = ...
+        self.load_model()
+
+    @lru_cache(maxsize=5)
+    def load_model(self, model_id: str = model_id):
+        self.model_id = model_id
         self.processor = DonutProcessor.from_pretrained(model_id)
         self.model = VisionEncoderDecoderModel.from_pretrained(model_id)
         self.model.to(DEVICE)
 
-    def load_model(self, model_id: str = model_id):
-        self.processor = DonutProcessor.from_pretrained(model_id)
-        self.model = VisionEncoderDecoderModel.from_pretrained(model_id)
-
     def get_text_from_image(self, image, task_prompt="<s_receipt>"):
         image_tensor = self.processor(image, return_tensors="pt").pixel_values
         print(f"image_tensor shape: {image_tensor.shape}")
+        task_prompt = task_prompt_dict[self.model_id]
         decoder_input_ids = self.processor.tokenizer(task_prompt,
                                                      add_special_tokens=False,
                                                      return_tensors="pt").input_ids
@@ -40,11 +49,15 @@ class DonutVLLM:
                                       )
         return outputs
 
-    def generate_output_xml(self, image_path):
-        image = Image.open(image_path)
+    def generate_output_xml(self, image_path: Union[str, Image.Image]):
+        if isinstance(image_path, str):
+            image = Image.open(image_path)
+        else:
+            image = image_path
         outputs = self.get_text_from_image(image)
         sequence = self.processor.batch_decode(outputs.sequences)[0]
-        sequence = sequence.replace(self.processor.tokenizer.eos_token, "").replace(self.processor.tokenizer.pad_token, "")
+        sequence = sequence.replace(self.processor.tokenizer.eos_token, "").replace(self.processor.tokenizer.pad_token,
+                                                                                    "")
         sequence = re.sub(r"<.*?>", "", sequence, count=1).strip()  # remove first task start token
         return sequence
 
